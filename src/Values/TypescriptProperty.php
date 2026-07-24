@@ -26,6 +26,11 @@ class TypescriptProperty
         return $this->isOptional() ? $this->name.'?' : $this->name;
     }
 
+    public function getRawName(): string
+    {
+        return $this->name;
+    }
+
     public function getType(): string
     {
         return $this->type;
@@ -39,6 +44,11 @@ class TypescriptProperty
     public function setOptional(bool $optional)
     {
         $this->optional = $optional;
+    }
+
+    public function setType(string $type): void
+    {
+        $this->type = $type;
     }
 
     private static function determineType(mixed $value): string

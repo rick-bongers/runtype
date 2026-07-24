@@ -18,6 +18,8 @@ class TypescriptType
 
     public function addProperty(TypescriptProperty $property): self
     {
+        $property = $this->dockBlock($property);
+
         $this->properties[] = $property;
 
         return $this;
@@ -61,8 +63,7 @@ class TypescriptType
 
     public function merge(TypescriptType $type, Collection $originalProperties): self
     {
-        $newProperties = $type->listProperties()
-            ->filter(fn ($prop) => ! $this->listProperties()->contains($prop));
+        $newProperties = $type->listProperties()->filter(fn ($prop) => ! $this->listProperties()->contains($prop));
 
         $this->addProperties($newProperties);
 
@@ -94,5 +95,73 @@ class TypescriptType
         $class = new ReflectionClass($className);
 
         return $class->getShortName().'Type';
+    }
+
+    public function dockBlock(TypescriptProperty $property): TypescriptProperty
+    {
+        $class = new ReflectionClass($this->class);
+        $fileName = $class->getFileName();
+
+        if ($fileName === false) {
+            return $property;
+        }
+
+        $lines = file($fileName);
+
+        if ($lines === false) {
+            return $property;
+        }
+
+        $propertyName = $property->getRawName();
+
+        foreach ($lines as $lineNumber => $line) {
+            if (preg_match("/['\"]" . preg_quote($propertyName, '/') . "['\"]\s*=>/", $line)) {
+                if ($lineNumber > 0) {
+                    $previousLine = trim($lines[$lineNumber - 1]);
+
+                    if (preg_match('/@var\s+(.+?)(?:\s*\*\/\s*$)/', $previousLine, $matches)) {
+                        $varType = trim($matches[1]);
+
+                        // Remove the variable name if present (e.g., "$canceledAt Carbon | null" -> "Carbon | null")
+                        $varType = preg_replace('/^\$\w+\s+/', '', $varType);
+
+                        $tsType = $this->phpTypeToTypescript($varType);
+                        $property->setType($tsType);
+                    }
+                }
+
+                break;
+            }
+        }
+
+        return $property;
+    }
+
+    private function phpTypeToTypescript(string $phpType): string
+    {
+        $phpType = trim($phpType);
+
+        // Split union types (e.g., "Carbon | null")
+        $parts = array_map('trim', preg_split('/\s*\|\s*/', $phpType));
+
+        $tsParts = array_map(function (string $part): string {
+            return match (true) {
+                strtolower($part) === 'null' => 'null',
+                strtolower($part) === 'string' => 'string',
+                strtolower($part) === 'int', strtolower($part) === 'integer', strtolower($part) === 'float', strtolower($part) === 'double' => 'number',
+                strtolower($part) === 'bool', strtolower($part) === 'boolean' => 'boolean',
+                strtolower($part) === 'array' => 'any[]',
+                strtolower($part) === 'mixed' => 'any',
+                strtolower($part) === 'void' => 'void',
+                // Carbon, DateTime, DateTimeInterface, etc. -> string
+                str_contains(strtolower($part), 'carbon'),
+                str_contains(strtolower($part), 'datetime') => 'string',
+                // Class references that are Resources -> qualified type name
+                class_exists($part) && is_subclass_of($part, \Illuminate\Http\Resources\Json\JsonResource::class) => self::determineNamespace($part) !== '' ? self::determineNamespace($part).'.'.self::determineName($part) : self::determineName($part),
+                default => 'any',
+            };
+        }, $parts);
+
+        return implode(' | ', $tsParts);
     }
 }
