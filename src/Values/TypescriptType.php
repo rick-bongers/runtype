@@ -126,14 +126,19 @@ class TypescriptType
                         // Remove the variable name if present (e.g., "$canceledAt Carbon | null" -> "Carbon | null")
                         $varType = trim(preg_replace('/\s*\$\w+/', '', $varType));
 
+                        [$optionals, $types] = collect(explode('|', $varType))->partition(fn ($item) => strtolower(trim($item)) === 'optional');
 
-                        $tsType = Arr::join(Arr::map(explode('|', $varType), function ($value) use ($propertyName) {
-                            $value = trim($value);
+                        $types = $types->map(function ($value) use ($propertyName) {
+                            $value = trim(trim($value), '\\');
 
                             return $this->phpTypeToTypescript($value);
-                        }), ' | ');
+                        });
 
-                        $property->setType($tsType);
+                        $property->setType($types->join(' | '));
+
+                        if ($optionals->isNotEmpty()) {
+                            $property->setOptional(true);
+                        }
                     }
                 }
 
