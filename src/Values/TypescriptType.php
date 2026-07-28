@@ -2,9 +2,12 @@
 
 namespace Vagebond\Runtype\Values;
 
-use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
 use ReflectionClass;
+use ReflectionNamedType;
+use ReflectionParameter;
+use ReflectionType;
+use ReflectionUnionType;
 
 class TypescriptType
 {
@@ -91,6 +94,57 @@ class TypescriptType
         return implode('.', $namespace);
     }
 
+    public static function unwrapData(string $data): string
+    {
+        $constructor = (new ReflectionClass($data))->getConstructor();
+
+        if ($constructor === null) {
+            return '{}';
+        }
+
+        $properties = collect($constructor->getParameters())
+            ->map(fn (ReflectionParameter $parameter): string => self::unwrapDataProperty($parameter))
+            ->implode('; ');
+
+        return "{ {$properties} }";
+    }
+
+    private static function unwrapDataProperty(ReflectionParameter $parameter): string
+    {
+        [$optionals, $types] = collect(explode('|', self::reflectionTypeToString($parameter->getType())))
+            ->partition(fn ($item) => strtolower(trim($item)) === 'optional');
+
+        $tsType = $types
+            ->map(fn ($value) => self::phpTypeToTypescript(trim(trim($value), '\\')))
+            ->filter()
+            ->join(' | ');
+
+        $optional = $optionals->isNotEmpty() || $parameter->isDefaultValueAvailable();
+
+        return $parameter->getName() . ($optional ? '?' : '') . ': ' . ($tsType !== '' ? $tsType : 'any');
+    }
+
+    private static function reflectionTypeToString(?ReflectionType $type): string
+    {
+        if ($type instanceof ReflectionUnionType) {
+            return collect($type->getTypes())
+                ->map(fn (ReflectionNamedType $namedType) => $namedType->getName())
+                ->implode('|');
+        }
+
+        if ($type instanceof ReflectionNamedType) {
+            $name = $type->getName();
+
+            if ($type->allowsNull() && ! in_array(strtolower($name), ['null', 'mixed'], true)) {
+                $name .= '|null';
+            }
+
+            return $name;
+        }
+
+        return 'mixed';
+    }
+
     public static function determineName(string $className): string
     {
         $class = new ReflectionClass($className);
@@ -131,7 +185,12 @@ class TypescriptType
                         $types = $types->map(function ($value) use ($propertyName) {
                             $value = trim(trim($value), '\\');
 
-                            return $this->phpTypeToTypescript($value);
+                            if ($propertyName === 'linking') {
+//                                if ($value)
+//                                dd($value);
+                            }
+
+                            return self::phpTypeToTypescript($value);
                         });
 
                         $property->setType($types->join(' | '));
@@ -149,7 +208,7 @@ class TypescriptType
         return $property;
     }
 
-    private function phpTypeToTypescript(string $phpType): string
+    private static function phpTypeToTypescript(string $phpType): string
     {
         $phpType = trim($phpType);
 
@@ -170,6 +229,7 @@ class TypescriptType
                 str_contains(strtolower($part), 'datetime') => 'string',
                 // Class references that are Resources -> qualified type name
                 class_exists($part) && is_subclass_of($part, \Illuminate\Http\Resources\Json\JsonResource::class) => self::determineNamespace($part) !== '' ? self::determineNamespace($part).'.'.self::determineName($part) : self::determineName($part),
+                class_exists($part) && is_subclass_of($part, \Spatie\LaravelData\Data::class) => self::unwrapData($part),
                 default => 'any',
             };
         }, $parts);
