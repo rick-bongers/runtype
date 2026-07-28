@@ -2,6 +2,7 @@
 
 namespace Vagebond\Runtype\Values;
 
+use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
 use ReflectionClass;
 
@@ -123,9 +124,15 @@ class TypescriptType
                         $varType = trim($matches[1]);
 
                         // Remove the variable name if present (e.g., "$canceledAt Carbon | null" -> "Carbon | null")
-                        $varType = preg_replace('/^\$\w+\s+/', '', $varType);
+                        $varType = trim(preg_replace('/\s*\$\w+/', '', $varType));
 
-                        $tsType = $this->phpTypeToTypescript($varType);
+
+                        $tsType = Arr::join(Arr::map(explode('|', $varType), function ($value) use ($propertyName) {
+                            $value = trim($value);
+
+                            return $this->phpTypeToTypescript($value);
+                        }), ' | ');
+
                         $property->setType($tsType);
                     }
                 }
